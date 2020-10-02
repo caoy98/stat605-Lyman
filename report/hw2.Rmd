@@ -1,0 +1,78 @@
+---
+title: "hw2"
+output: html_document
+author: "Yuan Cao (cao234@wisc.edu)"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F)
+rm(list = ls())
+require("FITSio")
+expsmooth = function(y, w){
+  len=length(y)
+  p=rep(0,len)
+  p[1]=y[1]
+  for (i in 2:len) {
+    p[i]=w*y[i]+(1-w)*p[i-1]
+  }
+  return(p)
+}
+```
+
+# Introduction
+
+## Choice of distance measure
+
+In order to find desired SDSS spectrum aligned with cB58, I think a measure of similarity between two spectra is significant. I chose Spearman correlation coefficient $r_s$ as "distance measure". (Note: In order to meet the requirement, i.e., sorting by increasing distance, the "distance" column in hw2.csv is $1-r_s$.) 
+$$r_s = \frac{\sum_i(x_i-\bar{x})(y_i-\bar{y})}{\sqrt{\sum_i(x_i-\bar{x})^2\sum_i(y_i-\bar{y})^2}}$$
+In the formula above, $x_i$ and $y_i$ is rank data converted from corresponding original data $X_i$ and $Y_i$.
+
+The reasons are listed as following:
+
+First, correlation is a tool to assess how well the relationship between two datasets can be described, it can recognize similar patterns in comparison. Second, compared with ordinary Pearson correlation, Spearman correlation is a robuster method (thanks for Augustine Tang's suggestion in Canvas). It does not require the distribution of data and is uneasily affected by outliers, which is suitable for our noisy and possibly non-normal spectra data. 
+
+
+## What tried and worked
+
+In data preprocessing, I first removed all bad observations with nonzero `and_mask`, then standardized SDSS spectra and cB58 data by subtracting mean and dividing by standard deviation. However, when I did analysis, I found four spectra data would be shorter than cB58 data, which caused some errors. So for these spectra, I just analyzed with original data in case they were similar to cB58 even some observations might be unreliable. I did not clean "outliers" far from most data as Spearman correlation is not sensitive to these points. Also, I applied exponential smoothing method to highly reduce the influence of noise. Thus, this analysis is relatively robust to input data.
+
+```{r cb58 with exponential smoothing}
+cb58 = readFrameFromFITS("cB58_Lyman_break.fit")
+plot(cb58$FLUX, type = "l", col = 4, ylab = "Flux", xlab = "Shifted wavelength", main = "Exponential Smoothing")
+lines(expsmooth(cb58$FLUX, 0.05), col = 2, lwd = 2)
+legend(x="topright", legend = c("Original cB58", "After smoothing"),
+       lty = c(1,1), col = c(4, 2), bty = "n", cex = 0.9)
+```
+
+
+For analysis, I first tried to use a `for` loop to evaluate every part with same length as cB58 of a spectrum, i.e., calculated correlation of $(y_1,\ldots,y_{2181})$, $(y_2,\ldots,y_{2182})$ and so on for each spectrum. Then selected the largest one and corresponding spectrum part, sorted these correlations after repeating this procedure for all other spectra to find best three. 
+
+Although this method worked, the problem was slow speed. For each spectrum, it went through 1000~2000 parts and performed calculation. In order to speed up, I tried a new way to search desired parts in less possible intervals. The cB58 data has a large trough and global minimum will be in the trough after exponential smoothing (shown above). Thus, I found relatively small local minimum, say lower than 0.25 quantile, for each smoothed spectrum data. These points were potential positions of trough. Then used a `for` loop to align the global minimum of smoothed cB58 data to all selected local minimums and calculate correlations for corresponding intervals. The number of possible intervals was significantly decreased by this mean, from 1000~2000 to dozens (thanks for Jingshan Huang's discussion for this method).
+
+
+## Difficulties
+
+One difficulty and drawback was the usage of `ivar` variable, which reflects the variance of observation. I did not use this feature in analysis and also not sure the appropriate way to use it. I have thought to use it in data preprocessing, but did not figure out a solution such as substitution or removing. Some discussion in Canvas treated variance as a weight to calculate weighted Euclidean distance, but weighted correlation seemed to have same weights for two data. Thus, I did not use whole information of spectra data but only flux pattern. I believe there will be more accurate results after using more information.
+
+
+# Graphs showing alignment
+
+The best three alignments are `spec-1353-53083-0579.fits`, `spec-2188-54595-0112.fits` and `spec-1788-54468-0050.fits`. Alignments are shown below with rescaled flux values to show the pattern clearly.
+
+```{r alignment}
+result = read.csv("hw2.csv")
+best_alignment = result[1:3, ]
+scaler = c(3.5, 2.5, 3.5)
+shift = c(-2, 4.5, 7)
+legendpos = c("topright", "topright", "bottomright")
+for (i in 1:3) {
+  spec = readFrameFromFITS(paste("data", best_alignment$spectrumID[i], sep = "/"))
+  begin = best_alignment$i[i]-1
+  plot(spec$flux, type = "l", col = 4, ylab = "Flux", 
+       xlab = "Shifted wavelength", main = paste("Alignment of", 
+                    best_alignment$spectrumID[i], sep = " "))
+  lines(c(rep(NA, begin), cb58$FLUX*scaler[i]+shift[i]), col = 2)
+  legend(col = c(4,2), lty = c(1,1), legend = c(best_alignment$spectrumID[i], 
+                  "cB58"), x = legendpos[i], bty = "n", cex = 0.9)
+}
+```
